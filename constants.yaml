@@ -1,0 +1,24 @@
+# 데이터베이스 연결 정보
+DB_PORT: 5432
+DB_DATABASE: "core16"
+DB_SERVER: "localhost"
+
+DB_USERNAME: "postgres"
+DB_PASSWORD: "core16!@"
+
+# 데이터 저장 설정
+STORE_NEW_ONLY: true
+
+# API 엔드포인트
+CBO_BASE_URL: "https://www.cbo.gov"
+CBO_DATA_URL: "https://www.cbo.gov/data/budget-economic-data"
+CBO_PUBLICATIONS_URL: "https://www.cbo.gov/data/publications-with-data-files"
+
+# 시계열 데이터 설정
+DEFAULT_FREQUENCY: "q"  # quarterly
+DEFAULT_FORM: "d1"     # first difference
+
+# 로깅 설정
+LOG_FORMAT: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+LOG_LEVEL: "INFO"
+MAX_LOG_LINES: 50      # 로그 파일당 최대 라인 수 
