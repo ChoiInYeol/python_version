@@ -1,80 +1,77 @@
-# CPI Nowcasting System
+# CPI Nowcasting with Dynamic Factor Model
 
-이 프로젝트는 미국 소비자물가지수(CPI)의 일별 nowcasting을 위한 다중 모델 시스템을 구현합니다.
+## 프로젝트 개요
+이 프로젝트는 동적 요인 모델(Dynamic Factor Model, DFM)을 사용하여 실시간 CPI(소비자물가지수) 예측을 수행합니다.
 
-## 주요 기능
+### 주요 특징
+- 실시간 CPI 예측 (Nowcasting)
+- 동적 요인 모델 기반
+- ElasticNet을 사용한 요인 추출
+- 실시간 성능 모니터링 (RMSE)
 
-- 다중 빈도 데이터 처리 (일별, 주별, 월별 데이터)
-- 세 가지 주요 모델 구현:
-  - MIDAS (Mixed Data Sampling) regression
-  - Dynamic Factor Model (DFM)
-  - Mixed-frequency Random Forest (MO-RFRN)
-- Walk-forward nowcasting 평가
-- 인터랙티브 시각화
+## 모델 구조
+1. **데이터 처리**
+   - 일별 데이터 로드 및 전처리
+   - 결측치 처리 및 이상치 제거
+   - 시계열 데이터 정규화
 
-## 프로젝트 구조
+2. **요인 추출**
+   - ElasticNet을 사용한 요인 추출
+   - Grid Search를 통한 하이퍼파라미터 최적화
+   - 다중 요인 모델링 지원
 
-```
-.
-├── data/
-│   └── final_df.csv          # 원본 데이터
-├── src/
-│   ├── preprocessing.py      # 데이터 전처리 모듈
-│   ├── models.py            # 모델 구현
-│   └── main.py              # 메인 실행 파일
-├── notebook/                 # Jupyter 노트북
-├── requirements.txt         # 의존성 패키지
-└── README.md               # 프로젝트 문서
-```
-
-## 설치 방법
-
-1. 가상환경 생성 및 활성화:
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\activate     # Windows
-```
-
-2. 의존성 설치:
-```bash
-pip install -r requirements.txt
-```
+3. **예측 및 평가**
+   - 실시간 예측 수행
+   - Rolling RMSE를 통한 성능 모니터링
+   - 시각화 및 결과 저장
 
 ## 사용 방법
+```python
+from dfm_model_gpt import DFMModel
 
-1. 데이터 준비:
-   - `data/final_df.csv` 파일에 필요한 데이터를 준비합니다.
-   - 데이터는 날짜 인덱스와 필요한 모든 변수들을 포함해야 합니다.
+model = DFMModel(
+    X_path='data/processed/X_processed.csv',
+    y_path='data/processed/y_processed.csv',
+    target='CPI_YOY',
+    train_window_size=365 * 10,  # 10년
+    forecast_horizon=30,          # 30일
+    n_factors=2                  # 2개 요인
+)
 
-2. 실행:
-```bash
-python src/main.py
+# 모델 학습
+model.fit()
+
+# 예측 결과 저장 및 시각화
+model.export_nowcast_csv('output/nowcasts.csv')
+model.plot_results('output')
+model.export_feature_importance('output')
 ```
 
-## 모델 설명
+## 주요 파라미터
+- `train_window_size`: 학습 기간 (일)
+- `forecast_horizon`: 예측 수평선 (일)
+- `n_factors`: 추출할 요인 수
+- `l1_ratio_range`: ElasticNet L1 비율 범위
+- `alpha_range`: ElasticNet 알파 범위
 
-### 1. MIDAS (Mixed Data Sampling) Regression
-- 고빈도와 저빈도 데이터를 함께 사용하는 혼합 데이터 샘플링 모델
-- 가중치를 통한 고빈도 데이터 집계
-- 최적화를 통한 가중치 학습
+## 출력 파일
+- `nowcasts.csv`: 예측 결과
+- `nowcast_plot.png/svg`: 예측 결과 시각화
+- `feature_importance.csv`: 변수 중요도
+- `feature_importance.png/svg`: 변수 중요도 시각화
 
-### 2. Dynamic Factor Model (DFM)
-- Kalman Filter 기반의 동적 요인 모델
-- PCA를 통한 초기 요인 추출
-- 시계열 구조를 고려한 예측
+## 개선 방향
+1. 예측 안정성 향상
+   - 이상치 처리 강화
+   - 요인 선택 로직 개선
+   - 예측값 스무딩 적용
 
-### 3. Mixed-frequency Random Forest (MO-RFRN)
-- 결측치를 처리할 수 있는 랜덤 포레스트 모델
-- 노드별 분할을 통한 혼합 빈도 데이터 처리
-- 스케일링을 통한 특성 정규화
+2. 성능 최적화
+   - 병렬 처리 도입
+   - 메모리 사용량 최적화
+   - 계산 효율성 개선
 
-## 성능 평가
-
-- RMSE (Root Mean Square Error)를 통한 모델 성능 평가
-- Walk-forward nowcasting을 통한 실시간 예측 성능 측정
-- 인터랙티브 시각화를 통한 결과 분석
-
-## 라이선스
-
-MIT License 
+3. 모니터링 강화
+   - 실시간 알림 기능
+   - 자동 재학습 기능
+   - 예측 신뢰도 평가 

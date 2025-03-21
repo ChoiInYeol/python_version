@@ -1,3 +1,7 @@
+"""
+model_gpt.py
+Dynamic Factor Model for CPI Nowcasting with ElasticNet, XGBoost, or LightGBM
+"""
 import pandas as pd
 import numpy as np
 import logging
@@ -9,9 +13,12 @@ from sklearn.linear_model import ElasticNet
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
 import joblib
+import xgboost as xgb
+import lightgbm as lgb
+import itertools
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("dfm_model_gpt")
+logger = logging.getLogger("model_gpt")
 
 class DFMModel:
     def __init__(
@@ -20,20 +27,24 @@ class DFMModel:
         y_path: str,
         target: str = 'CPI_YOY',
         train_window_size: int = 730,  # 약 2년
-        forecast_horizon: int = 90,     # 발표일 기준 N일 전부터 예측
         n_factors: int = 1,
-        l1_ratio_range: List[float] = [0.5, 0.7, 0.9],
-        alpha_range: List[float] = [1e-3, 1e-2, 1e-1],
+        model_type: str = 'elasticnet',  # 'elasticnet', 'xgboost', 'lightgbm'
+        l1_ratio_range: List[float] = [0.05, 0.1, 0.3, 0.5],
+        alpha_range: List[float] = [1e-4, 1e-3, 1e-2],
+        xgb_params: Optional[Dict] = None,  # XGBoost 기본 파라미터
+        lgb_params: Optional[Dict] = None,  # LightGBM 기본 파라미터
         model_path: Optional[str] = None
     ):
         self.X_path = X_path
         self.y_path = y_path
         self.target = target
         self.train_window_size = train_window_size
-        self.forecast_horizon = forecast_horizon
         self.n_factors = n_factors
+        self.model_type = model_type.lower()
         self.l1_ratio_range = l1_ratio_range
         self.alpha_range = alpha_range
+        self.xgb_params = xgb_params or {'max_depth': 3, 'learning_rate': 0.1, 'n_estimators': 100}
+        self.lgb_params = lgb_params or {'max_depth': 3, 'learning_rate': 0.1, 'n_estimators': 100}
         self.model_path = model_path
 
         self.X = None
@@ -47,6 +58,7 @@ class DFMModel:
             self.load_model(self.model_path)
 
     def load_data(self) -> None:
+        """X와 y 데이터를 로드하고, 오늘까지 확장하며 인덱스를 Period로 변환."""
         try:
             self.X = pd.read_csv(self.X_path, parse_dates=['date'], index_col='date')
             self.y = pd.read_csv(self.y_path, parse_dates=['date'], index_col='date')
@@ -64,25 +76,9 @@ class DFMModel:
             raise
 
     def _grid_search_factor(self, X_train: pd.DataFrame, y_train: pd.Series,
-                              X_val: pd.DataFrame, y_val: pd.Series
-                              ) -> Tuple[ElasticNet, StandardScaler, Dict, List]:
-        """
-        각 요인에 대한 ElasticNet 모델의 최적 하이퍼파라미터를 찾습니다.
-        
-        Args:
-            X_train: 학습 데이터
-            y_train: 학습 타겟
-            X_val: 검증 데이터
-            y_val: 검증 타겟
-            
-        Returns:
-            Tuple[ElasticNet, StandardScaler, Dict, List]: 
-                - 최적 모델
-                - 스케일러
-                - 최적 파라미터
-                - 유효한 변수 목록
-        """
-        # y의 NaN 제거
+                            X_val: pd.DataFrame, y_val: pd.Series
+                            ) -> Tuple[object, StandardScaler, Dict, List]:
+        """선택한 모델 타입에 따라 요인을 추출하며, Grid Search로 최적 파라미터 탐색."""
         train_mask = y_train.notna()
         val_mask = y_val.notna()
         X_train = X_train.loc[train_mask]
@@ -90,71 +86,125 @@ class DFMModel:
         X_val = X_val.loc[val_mask]
         y_val = y_val.loc[val_mask]
         
-        # 결측치가 20% 미만인 변수만 선택
+        # 결측치가 적은 특성만 선택
         valid_cols = X_train.columns[X_train.isna().mean() < 0.2]
         if len(valid_cols) < 10:
             raise ValueError(f"사용 가능한 변수 부족: {len(valid_cols)}")
-        X_train_valid = X_train[valid_cols].fillna(0)
-        X_val_valid = X_val[valid_cols].fillna(0)
+        
+        # 결측치 처리 및 스케일링
+        X_train_valid = X_train[valid_cols].fillna(X_train[valid_cols].mean())
+        X_val_valid = X_val[valid_cols].fillna(X_val[valid_cols].mean())
 
-        # 데이터 스케일링
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train_valid)
         X_val_scaled = scaler.transform(X_val_valid)
 
-        # Grid Search 수행
         best_model = None
         best_rmse = float('inf')
         best_params = {}
-        for alpha in self.alpha_range:
-            for l1_ratio in self.l1_ratio_range:
-                model = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, max_iter=10000,
-                                   tol=1e-3, random_state=42)
-                model.fit(X_train_scaled, y_train)
+
+        if self.model_type == 'elasticnet':
+            for alpha in self.alpha_range:
+                for l1_ratio in self.l1_ratio_range:
+                    model = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, max_iter=10000,
+                                       tol=1e-3, random_state=42)
+                    model.fit(X_train_scaled, y_train)
+                    pred = model.predict(X_val_scaled)
+                    rmse = mean_squared_error(y_val, pred)
+                    if rmse < best_rmse:
+                        best_rmse = rmse
+                        best_model = model
+                        best_params = {'alpha': alpha, 'l1_ratio': l1_ratio}
+
+        elif self.model_type == 'xgboost':
+            param_combinations = [dict(zip(self.xgb_params.keys(), v)) 
+                                for v in itertools.product(*self.xgb_params.values())]
+            
+            for params in param_combinations:
+                model = xgb.XGBRegressor(**params, random_state=42)
+                model.fit(X_train_scaled, y_train, 
+                         eval_set=[(X_val_scaled, y_val)], 
+                         verbose=False)
                 pred = model.predict(X_val_scaled)
                 rmse = mean_squared_error(y_val, pred)
                 if rmse < best_rmse:
                     best_rmse = rmse
                     best_model = model
-                    best_params = {'alpha': alpha, 'l1_ratio': l1_ratio}
+                    best_params = params
+
+        elif self.model_type == 'lightgbm':
+            param_combinations = [dict(zip(self.lgb_params.keys(), v)) 
+                                for v in itertools.product(*self.lgb_params.values())]
+            
+            for params in param_combinations:
+                # LightGBM 데이터셋 생성
+                train_data = lgb.Dataset(X_train_scaled, label=y_train)
+                val_data = lgb.Dataset(X_val_scaled, label=y_val, reference=train_data)
+                
+                # 기본 파라미터 설정
+                base_params = {
+                    'objective': 'regression',
+                    'metric': 'rmse',
+                    'boosting_type': 'gbdt',
+                    'random_state': 42,
+                    'verbose': -1
+                }
+                
+                # 사용자 정의 파라미터와 기본 파라미터 병합
+                params.update(base_params)
+                
+                try:
+                    model = lgb.train(
+                        params,
+                        train_data,
+                        valid_sets=[val_data],
+                        num_boost_round=params['n_estimators'],
+                        callbacks=[
+                            lgb.early_stopping(stopping_rounds=10, verbose=False),
+                            lgb.log_evaluation(period=0)
+                        ]
+                    )
+                    
+                    pred = model.predict(X_val_scaled)
+                    rmse = mean_squared_error(y_val, pred)
+                    
+                    if rmse < best_rmse:
+                        best_rmse = rmse
+                        best_model = model
+                        best_params = params
+                        
+                except Exception as e:
+                    logger.warning(f"LightGBM 학습 실패 (파라미터: {params}): {str(e)}")
+                    continue
+
+        else:
+            raise ValueError(f"지원되지 않는 model_type: {self.model_type}")
+
         logger.info(f"Validation 최적 RMSE: {best_rmse:.4f}")
+        logger.info(f"최적 파라미터: {best_params}")
         return best_model, scaler, best_params, valid_cols.tolist()
 
     def _compute_Z(self, X: pd.DataFrame, models=None, scalers=None,
                    valid_cols=None) -> pd.DataFrame:
-        """
-        입력 데이터로부터 요인 점수를 계산합니다.
-        
-        Args:
-            X: 입력 데이터
-            models: 요인 모델 리스트 (기본값: self.factor_models)
-            scalers: 스케일러 리스트 (기본값: self.scalers)
-            valid_cols: 유효한 변수 목록 (기본값: self.valid_columns)
-            
-        Returns:
-            pd.DataFrame: 요인 점수
-        """
+        """입력 X를 요인 시계열 Z로 변환."""
         Z = pd.DataFrame(index=X.index)
         models = models if models is not None else self.factor_models
         scalers = scalers if scalers is not None else self.scalers
         valid_cols = valid_cols if valid_cols is not None else self.valid_columns
         for i, (model, scaler, cols) in enumerate(zip(models, scalers, valid_cols)):
             X_valid = X[cols].fillna(0)
-            Z[f'Factor_{i+1}'] = model.predict(scaler.transform(X_valid))
+            X_scaled = scaler.transform(X_valid)
+            if isinstance(model, lgb.Booster):
+                Z[f'Factor_{i+1}'] = model.predict(X_scaled)
+            else:
+                Z[f'Factor_{i+1}'] = model.predict(X_scaled)
         return Z
 
     def fit(self) -> None:
-        """
-        모델을 학습합니다.
-        - 데이터 로드
-        - 시간순 80/20 분할
-        - 각 요인별 ElasticNet 모델 학습
-        - 잔차를 이용한 순차적 요인 추출
-        """
+        """최신 데이터를 사용해 모델을 학습."""
         self.load_data()
         end_date = pd.Timestamp.today()
         train_start = end_date - pd.Timedelta(days=self.train_window_size)
-        # 학습기간 내에서 실제 CPI 발표일(비NaN)만 선택
         mask = (self.X.index >= train_start.to_period('D')) & (self.X.index <= end_date.to_period('D')) & (self.y[self.target].notna())
         X_train_full = self.X.loc[mask].copy()
         y_train_full = self.y[self.target].loc[mask].copy()
@@ -162,7 +212,6 @@ class DFMModel:
         if X_train_full.empty or len(X_train_full) < 10:
             raise ValueError("학습 데이터 부족")
 
-        # 시간순 80/20 분할
         split_idx = int(len(X_train_full) * 0.8)
         X_train = X_train_full.iloc[:split_idx]
         y_train = y_train_full.iloc[:split_idx]
@@ -191,19 +240,12 @@ class DFMModel:
             self.save_model(self.model_path)
 
     def predict(self, X: pd.DataFrame) -> pd.Series:
-        """
-        입력 데이터에 대한 예측을 수행합니다.
-        
-        Args:
-            X: 입력 데이터
-            
-        Returns:
-            pd.Series: 예측값
-        """
+        """입력 X를 요인으로 변환 후 예측값 반환."""
         Z = self._compute_Z(X)
         return Z.sum(axis=1)
 
     def export_nowcast_csv(self, output_path: str = 'output/nowcasts.csv') -> None:
+        """전체 기간의 Nowcast와 Actual 값을 CSV로 저장."""
         nowcast = pd.DataFrame(index=self.X.index)
         nowcast['predicted'] = self.predict(self.X)
         nowcast['actual'] = self.y[self.target]
@@ -212,62 +254,47 @@ class DFMModel:
         logger.info(f"Nowcast results saved to {output_path}")
 
     def plot_results(self, output_dir: str = 'output') -> None:
+        """Nowcast와 Actual 비교 플롯 및 Rolling RMSE 플롯 생성."""
         os.makedirs(output_dir, exist_ok=True)
         nowcast = pd.DataFrame(index=self.X.index)
-        
-        # 2015년 이전 데이터는 제외
         start_date = pd.Period('2020-01-01', freq='D')
         nowcast = nowcast[nowcast.index >= start_date]
         
         nowcast['predicted'] = self.predict(self.X)
         nowcast['actual'] = self.y[self.target]
-        
-        # CSV 파일로 저장
         nowcast.to_csv(os.path.join(output_dir, 'nowcasts.csv'))
         
-        # RMSE 계산
         valid_mask = nowcast['actual'].notna()
         rmse_series = pd.Series(index=nowcast.index[valid_mask])
         for date in nowcast.index[valid_mask]:
             past_mask = (nowcast.index <= date) & valid_mask
-            if past_mask.sum() >= 2:  # 최소 2개 이상의 데이터 포인트 필요
+            if past_mask.sum() >= 2:
                 rmse = np.sqrt(mean_squared_error(
                     nowcast.loc[past_mask, 'actual'],
                     nowcast.loc[past_mask, 'predicted']
                 ))
                 rmse_series[date] = rmse
         
-        # 플롯 생성
         plt.style.use(['science', 'ieee'])
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), height_ratios=[2, 1], dpi=300)
         
-        # 상단 그래프: Nowcast vs Actual
         ax1.plot(nowcast.index.to_timestamp(), nowcast['predicted'], 
                 label='Nowcast', color='#4444FF', linewidth=1)
-        
-        # 실제값 플롯 (점과 선으로 표시)
-        actual_data = nowcast['actual'].copy()
-        actual_data = actual_data.ffill()  # NaN 값을 이전 값으로 채우기
-    
+        actual_data = nowcast['actual'].ffill()
         ax1.plot(nowcast.index.to_timestamp(), actual_data, 
                 color='#FF4444', linewidth=1, linestyle='--', alpha=0.5)
-        
-        # 실제값이 있는 지점에 큰 점으로 표시
         actual_points = nowcast[nowcast['actual'].notna()]
         ax1.scatter(actual_points.index.to_timestamp(), actual_points['actual'],
                    color='#FF4444', s=2, zorder=5, label='Actual', marker='^')
-        
-        # 실제 값이 있는 지점에 예측값 Scatter 표시
         nowcast_scatter_points = nowcast[nowcast['actual'].notna()]
         ax1.scatter(nowcast_scatter_points.index.to_timestamp(), nowcast_scatter_points['predicted'],
                    color='black', s=2, zorder=5, label='Nowcast', marker='*')
         
         ax1.legend(loc='upper right')
-        ax1.set_title("Real-Time CPI Nowcasting")
+        ax1.set_title(f"Real-Time CPI Nowcasting ({self.model_type.capitalize()})")
         ax1.set_ylabel("CPI YoY Change (%)")
         ax1.tick_params(axis='x', rotation=45)
         
-        # 하단 그래프: RMSE
         ax2.plot(rmse_series.index.to_timestamp(), rmse_series.values,
                 color='#44AA44', linewidth=1.5, label='Rolling RMSE')
         ax2.legend(loc='upper right')
@@ -282,25 +309,30 @@ class DFMModel:
         logger.info(f"Nowcast plot and CSV saved to {output_dir}")
 
     def analyze_factor_importance(self) -> pd.DataFrame:
+        """각 변수의 요인별 중요도를 계산하고 상위 20개 반환."""
         importance = {}
         for i, (model, cols) in enumerate(zip(self.factor_models, self.valid_columns)):
             if model is None or not cols:
                 continue
-            coefs = pd.Series(model.coef_, index=cols)
+            if self.model_type == 'elasticnet':
+                coefs = pd.Series(model.coef_, index=cols)
+            elif self.model_type == 'xgboost':
+                coefs = pd.Series(model.feature_importances_, index=cols)
+            elif self.model_type == 'lightgbm':
+                coefs = pd.Series(model.feature_importance(), index=cols)
             importance[f'Factor_{i+1}'] = coefs.abs()
         
-        # 중요도를 DataFrame으로 변환하고 평균 계산
         importance_df = pd.DataFrame(importance)
         if importance_df.empty:
             return pd.DataFrame()
-            
-        # 각 변수별 평균 중요도 계산 후 상위 20개 선택
+        
         mean_importance = importance_df.mean(axis=1)
         top_features = mean_importance.sort_values(ascending=False).head(20)
         logger.info("팩터별 변수 중요도:\n" + top_features.to_string())
         return top_features
 
     def export_feature_importance(self, output_dir: str = 'output') -> None:
+        """변수 중요도를 CSV와 플롯으로 저장."""
         os.makedirs(output_dir, exist_ok=True)
         importance_df = self.analyze_factor_importance()
         
@@ -308,16 +340,13 @@ class DFMModel:
             logger.warning("Feature importance 데이터가 없습니다.")
             return
             
-        # % 기호가 포함된 칼럼명 처리
         importance_df.index = importance_df.index.str.replace('%', 'pct')
-        
-        # Series를 DataFrame으로 변환하여 저장
         importance_df.to_frame(name='Importance').to_csv(os.path.join(output_dir, 'feature_importance.csv'))
         
         plt.style.use(['science', 'ieee'])
         plt.figure(figsize=(10,6), dpi=300)
         importance_df.plot(kind='bar')
-        plt.title("Feature Importance")
+        plt.title(f"Feature Importance ({self.model_type.capitalize()})")
         plt.xlabel("Feature")
         plt.ylabel("Importance")
         plt.xticks(rotation=45, ha='right')
@@ -328,20 +357,24 @@ class DFMModel:
         logger.info(f"Feature importance saved to {output_dir}")
 
     def save_model(self, path: str) -> None:
+        """모델과 관련 데이터를 저장."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
         model_data = {
             'factor_models': self.factor_models,
             'scalers': self.scalers,
             'best_params': self.best_params,
-            'valid_columns': self.valid_columns
+            'valid_columns': self.valid_columns,
+            'model_type': self.model_type
         }
         joblib.dump(model_data, path)
         logger.info(f"모델이 {path}에 저장되었습니다.")
 
     def load_model(self, path: str) -> None:
+        """저장된 모델을 로드."""
         model_data = joblib.load(path)
         self.factor_models = model_data['factor_models']
         self.scalers = model_data['scalers']
         self.best_params = model_data['best_params']
         self.valid_columns = model_data['valid_columns']
+        self.model_type = model_data['model_type']
         logger.info(f"모델을 {path}에서 로드했습니다.")
