@@ -29,6 +29,7 @@ class DFMModel:
         train_window_size: int = 730,  # 약 2년
         n_factors: int = 1,
         model_type: str = 'elasticnet',  # 'elasticnet', 'xgboost', 'lightgbm'
+        DATA_NAME: str = '9X',
         l1_ratio_range: List[float] = [0.05, 0.1, 0.3, 0.5],
         alpha_range: List[float] = [1e-4, 1e-3, 1e-2],
         xgb_params: Optional[Dict] = None,  # XGBoost 기본 파라미터
@@ -41,6 +42,7 @@ class DFMModel:
         self.train_window_size = train_window_size
         self.n_factors = n_factors
         self.model_type = model_type.lower()
+        self.DATA_NAME = DATA_NAME
         self.l1_ratio_range = l1_ratio_range
         self.alpha_range = alpha_range
         self.xgb_params = xgb_params or {'max_depth': 3, 'learning_rate': 0.1, 'n_estimators': 100}
@@ -244,7 +246,7 @@ class DFMModel:
         Z = self._compute_Z(X)
         return Z.sum(axis=1)
 
-    def export_nowcast_csv(self, output_path: str = 'output/nowcasts.csv') -> None:
+    def export_nowcast_csv(self, output_path: str = f'output/nowcasts.csv') -> None:
         """전체 기간의 Nowcast와 Actual 값을 CSV로 저장."""
         nowcast = pd.DataFrame(index=self.X.index)
         nowcast['predicted'] = self.predict(self.X)
@@ -253,7 +255,7 @@ class DFMModel:
         nowcast.to_csv(output_path)
         logger.info(f"Nowcast results saved to {output_path}")
 
-    def plot_results(self, output_dir: str = 'output') -> None:
+    def plot_results(self, output_dir: str = f'output/nowcasts') -> None:
         """Nowcast와 Actual 비교 플롯 및 Rolling RMSE 플롯 생성."""
         os.makedirs(output_dir, exist_ok=True)
         nowcast = pd.DataFrame(index=self.X.index)

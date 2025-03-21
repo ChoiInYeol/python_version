@@ -260,7 +260,7 @@ def process_data(df: pd.DataFrame, meta_df: pd.DataFrame) -> Tuple[pd.DataFrame,
     
     # 과거 Y값을 X의 피처로 사용하기 위한 시프트된 Y값들 생성
     lagged_y = pd.DataFrame(index=y.index)
-    for lag in range(1, 13):  # 1개월부터 12개월까지의 과거값
+    for lag in range(1, 2):  # 1개월부터 12개월까지의 과거값
         lagged_y[f'CPI_YOY_LAG_{lag}'] = y.shift(lag)
     
     # 설명변수(X) 추출
@@ -323,8 +323,8 @@ def main():
       4. 일별 데이터: 로그 차분
     """
     # 데이터 로드
-    DATA_NAME = 'final_df'
-    META_NAME = 'fred_meta_full_df'
+    DATA_NAME = '9X'
+    META_NAME = '9X_meta'
     
     df = load_data(f'data/{DATA_NAME}.csv')
     meta_df = load_meta_data(f'data/{META_NAME}.csv')
