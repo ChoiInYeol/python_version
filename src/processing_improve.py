@@ -323,8 +323,11 @@ def main():
       4. 일별 데이터: 로그 차분
     """
     # 데이터 로드
-    df = load_data('data/final_df.csv')
-    meta_df = load_meta_data('data/fred_meta_full_df.csv')
+    DATA_NAME = 'final_df'
+    META_NAME = 'fred_meta_full_df'
+    
+    df = load_data(f'data/{DATA_NAME}.csv')
+    meta_df = load_meta_data(f'data/{META_NAME}.csv')
     
     # 데이터 전처리
     X, y, release_dates = process_data(df, meta_df)
@@ -338,12 +341,12 @@ def main():
     y.index.name = 'date'
 
     # 결과 저장
-    processed_df.to_csv('data/processed/processed_data_full.csv', index=True)
-    release_dates.to_csv('data/processed/cpi_release_date_full.csv', index=True)
+    processed_df.to_csv(f'data/processed/{DATA_NAME}.csv', index=True)
+    release_dates.to_csv(f'data/processed/{DATA_NAME}_cpi_release_date.csv', index=True)
     
     # X, y 데이터셋 별도 저장
-    X.to_csv('data/processed/X_processed.csv', index=True)
-    y.to_frame().to_csv('data/processed/y_processed.csv', index=True)
+    X.to_csv(f'data/processed/X_{DATA_NAME}.csv', index=True)
+    y.to_frame().to_csv(f'data/processed/y_{DATA_NAME}.csv', index=True)
 
 if __name__ == "__main__":
     main()
