@@ -1,3 +1,6 @@
+"""
+데이터 전처리 개선 모듈
+"""
 import pandas as pd
 import numpy as np
 from typing import Tuple
@@ -240,7 +243,7 @@ def transform_single_column(series: pd.Series, transform_type: TransformationTyp
     # 일간 데이터로 리샘플링
     return transformed.resample('D').ffill()
 
-def process_data(df: pd.DataFrame, meta_df: pd.DataFrame, use_cpi_lags: bool = False) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+def process_data(df: pd.DataFrame, meta_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
     """
     데이터를 전처리하여 X, y, 발표일 데이터를 생성합니다.
     """
@@ -300,41 +303,6 @@ def process_data(df: pd.DataFrame, meta_df: pd.DataFrame, use_cpi_lags: bool = F
         for series in transformed_series:
             X = X.join(series)
         
-        # CPI 관련 데이터 처리
-        if use_cpi_lags:
-            logger.info(f"CPI lag 생성 시작: {cpi_columns}")
-            
-            # CPI 관련 데이터의 lag 생성
-            for col in cpi_columns:
-                if col in df.columns:
-                    logger.debug(f"{col} lag 생성 중...")
-                    # CPI 데이터 추출 및 YoY 변환
-                    cpi_series = df[col].dropna()
-                    cpi_yoy = (cpi_series - cpi_series.shift(12)) / cpi_series.shift(12) * 100
-                    cpi_yoy_daily = cpi_yoy.resample('D').ffill()
-
-                    # 발표일 필터링
-                    release_dates_filtered = release_dates[release_dates[RELEASE_DATE_COLUMN] >= cpi_yoy_daily.index.min()]
-                    release_dates_sorted = sorted(release_dates_filtered[RELEASE_DATE_COLUMN])
-                    release_dates_sorted.append(cpi_yoy_daily.index.max() + pd.Timedelta(days=1))  # 마지막 보정
-
-                    lag1_series = pd.Series(index=cpi_yoy_daily.index, dtype='float64')
-
-                    # 발표일 간 구간별 값 채우기 (lag1)
-                    for i in range(len(release_dates_sorted) - 1):
-                        current_release = release_dates_sorted[i]
-                        next_release = release_dates_sorted[i + 1] - pd.Timedelta(days=1)
-                        if current_release not in cpi_yoy_daily.index:
-                            continue
-                        lag1_series.loc[current_release + pd.Timedelta(days=1): next_release] = cpi_yoy_daily.loc[current_release]
-
-                    # lag1 기준으로 lag2, lag3 생성
-                    X[f'{col}_LAG_1'] = lag1_series
-                    X[f'{col}_LAG_2'] = lag1_series.shift(30)
-                    X[f'{col}_LAG_3'] = lag1_series.shift(60)
-                else:
-                    logger.warning(f"{col} 컬럼이 데이터프레임에 없습니다.")
-        
         # 모든 행이 NaN인 컬럼 제거
         X = X.dropna(axis=1, how='all')
         logger.info(f"NaN 컬럼 제거 후 남은 컬럼 수: {len(X.columns)}")
@@ -370,16 +338,13 @@ def main():
         DATA_NAME = '9X'
         META_NAME = '9X_meta'
         
-        # CPI 관련 데이터의 lag 사용 여부 설정
-        USE_CPI_LAGS = True  # True로 설정하면 CPI 관련 데이터의 lag를 사용
-        
         logger.info(f"데이터 로드 시작: {DATA_NAME}, {META_NAME}")
         df = load_data(f'data/{DATA_NAME}.csv')
         meta_df = load_meta_data(f'data/{META_NAME}.csv')
         logger.info(f"데이터 로드 완료: df shape={df.shape}, meta_df shape={meta_df.shape}")
         
         # 데이터 전처리
-        X, y, release_dates = process_data(df, meta_df, use_cpi_lags=USE_CPI_LAGS)
+        X, y, release_dates = process_data(df, meta_df)
         
         # 최종 데이터셋 생성
         processed_df = pd.concat([X, y], axis=1)
