@@ -1,77 +1,163 @@
-# CPI Nowcasting with Dynamic Factor Model
+# 실시간 CPI 예측 시스템 (Real-Time CPI Nowcasting System)
 
-## 프로젝트 개요
-이 프로젝트는 동적 요인 모델(Dynamic Factor Model, DFM)을 사용하여 실시간 CPI(소비자물가지수) 예측을 수행합니다.
+## 1. 개요
 
-### 주요 특징
-- 실시간 CPI 예측 (Nowcasting)
-- 동적 요인 모델 기반
-- ElasticNet을 사용한 요인 추출
-- 실시간 성능 모니터링 (RMSE)
+본 시스템은 미국 소비자물가지수(CPI)의 실시간 예측(Nowcasting)을 위한 Dynamic Factor Model(DFM) 기반 예측 시스템입니다. 실시간성과 정확성을 모두 고려하여 설계되었으며, 다양한 머신러닝 모델(ElasticNet, XGBoost, LightGBM)을 지원합니다.
 
-## 모델 구조
-1. **데이터 처리**
-   - 일별 데이터 로드 및 전처리
-   - 결측치 처리 및 이상치 제거
-   - 시계열 데이터 정규화
+### 1.1 Dynamic Factor Model (DFM)의 요인(Z)
+- **요인(Z)의 의미**: 
+  - 고차원 경제 데이터에서 추출된 저차원 요약 지표
+  - 복잡한 경제 관계를 단순화하여 포착
+  - 각 요인은 특정 경제 현상을 대표 (예: 경기, 인플레이션, 금융 상황 등)
 
-2. **요인 추출**
-   - ElasticNet을 사용한 요인 추출
-   - Grid Search를 통한 하이퍼파라미터 최적화
-   - 다중 요인 모델링 지원
+- **요인 추출 과정**:
+  - 입력 데이터(X)에서 요인(Z) 추출
+  - 각 요인은 선형 또는 비선형 조합으로 구성
+  - 잔차를 통한 추가 요인 추출 가능
 
-3. **예측 및 평가**
-   - 실시간 예측 수행
-   - Rolling RMSE를 통한 성능 모니터링
-   - 시각화 및 결과 저장
+- **요인의 활용**:
+  - 예측에 사용되는 최종 입력 변수
+  - 각 요인별 변수 중요도 분석 가능
+  - 경제 해석을 위한 의미 있는 지표로 활용
 
-## 사용 방법
+### 1.2 모델 구조
+Dynamic Factor Model의 기본 구조는 다음과 같습니다:
+
+1. **요인 추출 (X → Z)**:
+   
+   $$Z_t = f(X_t) + \epsilon_t$$
+   
+   여기서:
+   - $(X_t)$: t시점의 입력 변수 벡터
+   - $Z_t$: t시점의 추출된 요인 벡터
+   - $f(\cdot)$: 요인 추출 함수 (선형 또는 비선형)
+   - $\epsilon_t$: 요인 추출 오차
+
+2. **예측 (Z → Y)**:
+
+   $$Y_t = \sum_{i=1}^n \beta_i Z_{t,i} + \eta_t$$
+
+   여기서:
+   - $Y_t$: t시점의 CPI YoY 변화율
+   - $Z_{t,i}$: t시점의 i번째 요인
+   - $(\beta_i)$: i번째 요인의 가중치
+   - $\eta_t$: 예측 오차
+
+3. **전체 모델**:
+   
+   $$ Y_t = \sum_{i=1}^n \beta_i f_i(X_t) + \epsilon_t + \eta_t $$
+   
+
+이 구조를 통해:
+- 고차원 입력 데이터(X)를 저차원 요인(Z)으로 변환
+- 요인을 통해 CPI YoY 변화율(Y) 예측
+- 실시간성과 정확성을 모두 고려한 예측 가능
+
+## 2. 시스템 특징
+
+### 2.1 실시간성 보장
+- **데이터 처리 최적화**: 
+  - CPI 관련 데이터(CPILFESL, CPIUFDSL, CPIHOSSL)는 잠재적인 Y로 처리하여 X에서 제외
+  - 대신 이들의 lag 값을 X에 포함하여 예측력 향상
+  - 결측치 처리와 리샘플링을 최적화하여 실시간 처리 속도 향상
+
+- **모델 학습 효율성**:
+  - Rolling window 방식으로 최신 데이터에 맞춰 지속적 학습
+  - Grid Search를 통한 최적 파라미터 탐색
+  - Early stopping을 통한 학습 시간 최적화
+
+### 2.2 예측 정확도 향상
+- **다중 요인 모델링**:
+  - 여러 요인을 추출하여 복잡한 경제 관계 포착
+  - 각 요인별 변수 중요도 분석 가능
+  - 잔차를 통한 추가 요인 추출
+
+- **데이터 전처리 최적화**:
+  - 변수별 특성에 맞는 변환 방식 적용
+  - 계절성 조정 고려
+  - 결측치 처리 전략 수립
+
+## 3. 시스템 구성
+
+### 3.1 데이터 처리 모듈 (processing_improve.py)
+- 데이터 로드 및 전처리
+- 변수 변환 및 lag 생성
+- 실시간 데이터 업데이트 지원
+
+### 3.2 모델 모듈 (model.py)
+- Dynamic Factor Model 구현
+- 다중 요인 추출
+- 실시간 예측 수행
+- 모델 저장 및 로드 기능
+
+### 3.3 시각화 모듈 (visualizer.py)
+- 실시간 예측 결과 시각화
+- Rolling RMSE 추적
+- 변수 중요도 분석 및 시각화
+
+## 4. 실시간 예측 프로세스
+
+1. **데이터 수집 및 전처리**
+   - 실시간 데이터 수집
+   - 결측치 처리 및 변수 변환
+   - CPI 관련 데이터의 lag 생성
+
+2. **모델 학습**
+   - 최신 데이터로 모델 업데이트
+   - Grid Search로 최적 파라미터 탐색
+   - 다중 요인 추출
+
+3. **예측 수행**
+   - 실시간 예측값 생성
+   - 예측 신뢰도 평가
+   - 결과 시각화
+
+## 5. 사용 방법
+
 ```python
-from dfm_model_gpt import DFMModel
-
+# 모델 초기화
 model = DFMModel(
-    X_path='data/processed/X_processed.csv',
-    y_path='data/processed/y_processed.csv',
-    target='CPI_YOY',
-    train_window_size=365 * 10,  # 10년
-    forecast_horizon=30,          # 30일
-    n_factors=2                  # 2개 요인
+    X_path='data/processed/X_9X.csv',
+    y_path='data/processed/y_9X.csv',
+    model_type='lightgbm',  # 'elasticnet', 'xgboost', 'lightgbm' 중 선택
+    train_window_size=730,  # 약 2년
+    n_factors=1  # 요인 수
 )
 
 # 모델 학습
 model.fit()
 
-# 예측 결과 저장 및 시각화
-model.export_nowcast_csv('output/nowcasts.csv')
-model.plot_results('output')
-model.export_feature_importance('output')
+# 예측 수행
+predictions = model.predict(X)
+
+# 결과 시각화
+model.plot_results(output_dir='output/nowcasts')
 ```
 
-## 주요 파라미터
-- `train_window_size`: 학습 기간 (일)
-- `forecast_horizon`: 예측 수평선 (일)
-- `n_factors`: 추출할 요인 수
-- `l1_ratio_range`: ElasticNet L1 비율 범위
-- `alpha_range`: ElasticNet 알파 범위
+## 6. 성능 평가
 
-## 출력 파일
-- `nowcasts.csv`: 예측 결과
-- `nowcast_plot.png/svg`: 예측 결과 시각화
-- `feature_importance.csv`: 변수 중요도
-- `feature_importance.png/svg`: 변수 중요도 시각화
+- **실시간성**: 
+  - 데이터 수집부터 예측까지 전체 프로세스 자동화
+  - 실시간 모델 업데이트 지원
 
-## 개선 방향
-1. 예측 안정성 향상
-   - 이상치 처리 강화
-   - 요인 선택 로직 개선
-   - 예측값 스무딩 적용
+- **정확도**:
+  - Rolling RMSE를 통한 지속적 성능 모니터링
+  - 다중 요인 모델링으로 예측 정확도 향상
+  - 변수 중요도 분석을 통한 모델 해석성 확보
 
-2. 성능 최적화
-   - 병렬 처리 도입
-   - 메모리 사용량 최적화
-   - 계산 효율성 개선
+## 7. 향후 개선 사항
 
-3. 모니터링 강화
-   - 실시간 알림 기능
-   - 자동 재학습 기능
-   - 예측 신뢰도 평가 
+1. **실시간성 강화**:
+   - 데이터 수집 자동화
+   - 모델 업데이트 주기 최적화
+   - 예측 속도 개선
+
+2. **정확도 향상**:
+   - 추가 요인 도입
+   - 앙상블 기법 적용
+   - 불확실성 추정 기능 추가
+
+3. **시스템 안정성**:
+   - 에러 처리 강화
+   - 로깅 시스템 개선
+   - 백업 시스템 구축 

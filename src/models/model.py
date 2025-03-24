@@ -7,8 +7,6 @@ import numpy as np
 import logging
 import os
 from typing import Optional, Tuple, Dict, List
-import matplotlib.pyplot as plt
-import scienceplots
 from sklearn.linear_model import ElasticNet
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
@@ -16,6 +14,7 @@ import joblib
 import xgboost as xgb
 import lightgbm as lgb
 import itertools
+from visualizer import DFMVisualizer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("model_gpt")
@@ -257,58 +256,14 @@ class DFMModel:
 
     def plot_results(self, output_dir: str = f'output/nowcasts') -> None:
         """Nowcast와 Actual 비교 플롯 및 Rolling RMSE 플롯 생성."""
-        os.makedirs(output_dir, exist_ok=True)
         nowcast = pd.DataFrame(index=self.X.index)
-        start_date = pd.Period('2020-01-01', freq='D')
-        nowcast = nowcast[nowcast.index >= start_date]
-        
         nowcast['predicted'] = self.predict(self.X)
         nowcast['actual'] = self.y[self.target]
         nowcast.to_csv(os.path.join(output_dir, 'nowcasts.csv'))
         
-        valid_mask = nowcast['actual'].notna()
-        rmse_series = pd.Series(index=nowcast.index[valid_mask])
-        for date in nowcast.index[valid_mask]:
-            past_mask = (nowcast.index <= date) & valid_mask
-            if past_mask.sum() >= 2:
-                rmse = np.sqrt(mean_squared_error(
-                    nowcast.loc[past_mask, 'actual'],
-                    nowcast.loc[past_mask, 'predicted']
-                ))
-                rmse_series[date] = rmse
-        
-        plt.style.use(['science', 'ieee'])
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), height_ratios=[2, 1], dpi=300)
-        
-        ax1.plot(nowcast.index.to_timestamp(), nowcast['predicted'], 
-                label='Nowcast', color='#4444FF', linewidth=1)
-        actual_data = nowcast['actual'].ffill()
-        ax1.plot(nowcast.index.to_timestamp(), actual_data, 
-                color='#FF4444', linewidth=1, linestyle='--', alpha=0.5)
-        actual_points = nowcast[nowcast['actual'].notna()]
-        ax1.scatter(actual_points.index.to_timestamp(), actual_points['actual'],
-                   color='#FF4444', s=2, zorder=5, label='Actual', marker='^')
-        nowcast_scatter_points = nowcast[nowcast['actual'].notna()]
-        ax1.scatter(nowcast_scatter_points.index.to_timestamp(), nowcast_scatter_points['predicted'],
-                   color='black', s=2, zorder=5, label='Nowcast', marker='*')
-        
-        ax1.legend(loc='upper right')
-        ax1.set_title(f"Real-Time CPI Nowcasting ({self.model_type.capitalize()})")
-        ax1.set_ylabel("CPI YoY Change (%)")
-        ax1.tick_params(axis='x', rotation=45)
-        
-        ax2.plot(rmse_series.index.to_timestamp(), rmse_series.values,
-                color='#44AA44', linewidth=1.5, label='Rolling RMSE')
-        ax2.legend(loc='upper right')
-        ax2.set_xlabel("Date")
-        ax2.set_ylabel("RMSE")
-        ax2.tick_params(axis='x', rotation=45)
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'nowcast_plot.png'), dpi=300)
-        plt.savefig(os.path.join(output_dir, 'nowcast_plot.svg'))
-        plt.close()
-        logger.info(f"Nowcast plot and CSV saved to {output_dir}")
+        visualizer = DFMVisualizer(self.model_type, output_dir)
+        visualizer.plot_nowcast_results(nowcast)
+        visualizer.plot_prediction_accuracy(nowcast)
 
     def analyze_factor_importance(self) -> pd.DataFrame:
         """각 변수의 요인별 중요도를 계산하고 상위 20개 반환."""
@@ -335,28 +290,14 @@ class DFMModel:
 
     def export_feature_importance(self, output_dir: str = 'output') -> None:
         """변수 중요도를 CSV와 플롯으로 저장."""
-        os.makedirs(output_dir, exist_ok=True)
         importance_df = self.analyze_factor_importance()
         
         if importance_df.empty:
             logger.warning("Feature importance 데이터가 없습니다.")
             return
             
-        importance_df.index = importance_df.index.str.replace('%', 'pct')
-        importance_df.to_frame(name='Importance').to_csv(os.path.join(output_dir, 'feature_importance.csv'))
-        
-        plt.style.use(['science', 'ieee'])
-        plt.figure(figsize=(10,6), dpi=300)
-        importance_df.plot(kind='bar')
-        plt.title(f"Feature Importance ({self.model_type.capitalize()})")
-        plt.xlabel("Feature")
-        plt.ylabel("Importance")
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'feature_importance.png'), dpi=300)
-        plt.savefig(os.path.join(output_dir, 'feature_importance.svg'))
-        plt.close()
-        logger.info(f"Feature importance saved to {output_dir}")
+        visualizer = DFMVisualizer(self.model_type, output_dir)
+        visualizer.plot_feature_importance(importance_df)
 
     def save_model(self, path: str) -> None:
         """모델과 관련 데이터를 저장."""

@@ -7,7 +7,7 @@ import pandas as pd
 
 def main():
     # 데이터 이름 선택: 'full', '9X'
-    data_name = '9X'
+    data_name = 'full'
     
     # 모델 타입 선택: 'elasticnet', 'xgboost', 'lightgbm'
     model_type = 'elasticnet'  # 원하는 모델로 변경 가능
@@ -25,7 +25,7 @@ def main():
         X_path=f'data/processed/X_{data_name}.csv',
         y_path=f'data/processed/y_{data_name}.csv',
         target='CPI_YOY',
-        train_window_size=365 * 5,  # 10년
+        train_window_size=365 * 8,  # 10년
         n_factors=2,
         model_type=model_type,
         DATA_NAME=data_name,
@@ -39,8 +39,8 @@ def main():
     
     # 전체 Nowcast 출력
     model.export_nowcast_csv(f'output/nowcasts_{model_type}_{data_name}/nowcasts.csv')
-    model.plot_results(f'output/nowcasts_{model_type}_{data_name}')
-    model.export_feature_importance(f'output/nowcasts_{model_type}_{data_name}')
+    model.plot_results(f'output/nowcasts_{model_type}_{data_name}_5y')
+    model.export_feature_importance(f'output/nowcasts_{model_type}_{data_name}_5y')
     
     # 오늘 날짜의 Nowcast 출력
     today = pd.Timestamp.today().to_period('D')

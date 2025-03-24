@@ -4,6 +4,13 @@ from typing import Tuple
 from enum import Enum
 import logging
 
+# 로깅 설정
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # 상수 정의
 TARGET_COLUMN = 'CPIAUCSL'  # CPI 데이터 컬럼명
 RELEASE_DATE_COLUMN = 'release_date'  # 발표일 컬럼명
@@ -233,82 +240,118 @@ def transform_single_column(series: pd.Series, transform_type: TransformationTyp
     # 일간 데이터로 리샘플링
     return transformed.resample('D').ffill()
 
-def process_data(df: pd.DataFrame, meta_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+def process_data(df: pd.DataFrame, meta_df: pd.DataFrame, use_cpi_lags: bool = False) -> Tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
     """
     데이터를 전처리하여 X, y, 발표일 데이터를 생성합니다.
-    
-    Args:
-        df (pd.DataFrame): 원본 데이터프레임
-        meta_df (pd.DataFrame): 메타데이터 데이터프레임
-        
-    Returns:
-        Tuple[pd.DataFrame, pd.Series, pd.DataFrame]: 
-            - X: 설명변수 데이터프레임 (과거 Y값 포함)
-            - y: 타겟변수 시리즈 (발표일에만 값 존재)
-            - release_dates: CPI 발표일 데이터프레임
     """
-    # 오늘 날짜 추출
-    today = pd.Timestamp.today()
-    
-    # CPI 데이터 추출 및 처리
-    cpi_data = df[TARGET_COLUMN]
-    release_dates = set_cpi_release_date(cpi_data)
-    y = cpi_yoy_transform(release_dates)
-    
-    # Y는 리샘플링하지 않고 발표일의 값만 유지
-    y = y[TARGET_YOY_COLUMN]
-    
-    # 과거 Y값을 X의 피처로 사용하기 위한 시프트된 Y값들 생성
-    lagged_y = pd.DataFrame(index=y.index)
-    for lag in range(1, 2):  # 1개월부터 12개월까지의 과거값
-        lagged_y[f'CPI_YOY_LAG_{lag}'] = y.shift(lag)
-    
-    # 설명변수(X) 추출
-    X_columns = [col for col in df.columns if col != TARGET_COLUMN]
-    transformed_series = []
-    
-    # 각 컬럼별 독립적 변환 수행
-    for col in X_columns:
-        series = df[col]
-        meta_row = meta_df[meta_df['id'] == col]
+    try:
+        # 오늘 날짜 추출
+        today = pd.Timestamp.today()
+        logger.info(f"데이터 처리 시작: {today}")
         
-        if not meta_row.empty:
-            meta_info = meta_row.iloc[0]
-            transform_type = determine_transform_type(meta_info)
-            transformed = transform_single_column(
-                series,
-                transform_type,
-                meta_info['frequency_short']
-            )
-        else:
-            # 메타데이터가 없는 경우 YoY 변환
-            transformed = transform_single_column(series, TransformationType.YOY)
+        # CPI 데이터 추출 및 처리
+        cpi_data = df[TARGET_COLUMN]
+        release_dates = set_cpi_release_date(cpi_data)
+        y = cpi_yoy_transform(release_dates)
+        
+        # Y는 리샘플링하지 않고 발표일의 값만 유지
+        y = y[TARGET_YOY_COLUMN]
+        logger.info(f"CPI YoY 변환 완료: {len(y)} 개의 데이터 포인트")
+        
+        # CPI 관련 데이터 목록 (잠재적인 Y)
+        cpi_columns = ['CPILFESL', 'CPIUFDSL', 'CPIHOSSL', 'CPIAUCSL']
+        
+        # 설명변수(X) 추출 (CPI 관련 데이터 제외)
+        X_columns = [col for col in df.columns if col not in cpi_columns]
+        logger.info(f"변환할 컬럼 수: {len(X_columns)}")
+        transformed_series = []
+        
+        # 각 컬럼별 독립적 변환 수행
+        for col in X_columns:
+            try:
+                series = df[col]
+                meta_row = meta_df[meta_df['id'] == col]
+                
+                if not meta_row.empty:
+                    meta_info = meta_row.iloc[0]
+                    transform_type = determine_transform_type(meta_info)
+                    logger.debug(f"{col} 변환: {transform_type.value}")
+                    transformed = transform_single_column(
+                        series,
+                        transform_type,
+                        meta_info['frequency_short']
+                    )
+                else:
+                    logger.warning(f"{col}의 메타데이터가 없습니다. YoY 변환을 사용합니다.")
+                    transformed = transform_single_column(series, TransformationType.YOY)
+                
+                transformed.name = col
+                transformed_series.append(transformed)
+                
+            except Exception as e:
+                logger.error(f"{col} 변환 중 오류 발생: {str(e)}")
+                continue
+        
+        # 모든 변환된 시리즈를 데이터프레임으로 병합
+        date_range = pd.date_range(start=df.index.min(), end=max(df.index.max(), today), freq='D')
+        X = pd.DataFrame(index=date_range)
+        
+        # 변환된 시계열 데이터 추가
+        for series in transformed_series:
+            X = X.join(series)
+        
+        # CPI 관련 데이터 처리
+        if use_cpi_lags:
+            logger.info(f"CPI lag 생성 시작: {cpi_columns}")
             
-        transformed.name = col
-        transformed_series.append(transformed)
-    
-    # 모든 변환된 시리즈를 데이터프레임으로 병합
-    date_range = pd.date_range(start=df.index.min(), end=max(df.index.max(), today), freq='D')
-    X = pd.DataFrame(index=date_range)
-    
-    # 변환된 시계열 데이터 추가
-    for series in transformed_series:
-        X = X.join(series)
-    
-    # 과거 Y값들을 X에 추가 (일간 데이터로 리샘플링)
-    lagged_y_daily = lagged_y.resample('D').ffill()
-    X = X.join(lagged_y_daily)
-    
-    # 모든 행이 NaN인 컬럼 제거
-    X = X.dropna(axis=1, how='all')
-    
-    # X만 전방향 결측치 보간
-    X = X.ffill()
-    
-    X.index.name = 'date'
-    y.index.name = 'date'
-    
-    return X, y, release_dates
+            # CPI 관련 데이터의 lag 생성
+            for col in cpi_columns:
+                if col in df.columns:
+                    logger.debug(f"{col} lag 생성 중...")
+                    # CPI 데이터 추출 및 YoY 변환
+                    cpi_series = df[col].dropna()
+                    cpi_yoy = (cpi_series - cpi_series.shift(12)) / cpi_series.shift(12) * 100
+                    cpi_yoy_daily = cpi_yoy.resample('D').ffill()
+
+                    # 발표일 필터링
+                    release_dates_filtered = release_dates[release_dates[RELEASE_DATE_COLUMN] >= cpi_yoy_daily.index.min()]
+                    release_dates_sorted = sorted(release_dates_filtered[RELEASE_DATE_COLUMN])
+                    release_dates_sorted.append(cpi_yoy_daily.index.max() + pd.Timedelta(days=1))  # 마지막 보정
+
+                    lag1_series = pd.Series(index=cpi_yoy_daily.index, dtype='float64')
+
+                    # 발표일 간 구간별 값 채우기 (lag1)
+                    for i in range(len(release_dates_sorted) - 1):
+                        current_release = release_dates_sorted[i]
+                        next_release = release_dates_sorted[i + 1] - pd.Timedelta(days=1)
+                        if current_release not in cpi_yoy_daily.index:
+                            continue
+                        lag1_series.loc[current_release + pd.Timedelta(days=1): next_release] = cpi_yoy_daily.loc[current_release]
+
+                    # lag1 기준으로 lag2, lag3 생성
+                    X[f'{col}_LAG_1'] = lag1_series
+                    X[f'{col}_LAG_2'] = lag1_series.shift(30)
+                    X[f'{col}_LAG_3'] = lag1_series.shift(60)
+                else:
+                    logger.warning(f"{col} 컬럼이 데이터프레임에 없습니다.")
+        
+        # 모든 행이 NaN인 컬럼 제거
+        X = X.dropna(axis=1, how='all')
+        logger.info(f"NaN 컬럼 제거 후 남은 컬럼 수: {len(X.columns)}")
+        logger.debug(f"남은 컬럼 목록: {X.columns.tolist()}")
+        
+        # X만 전방향 결측치 보간
+        X = X.ffill()
+        
+        X.index.name = 'date'
+        y.index.name = 'date'
+        
+        logger.info(f"데이터 처리 완료: X shape={X.shape}, y shape={y.shape}")
+        return X, y, release_dates
+        
+    except Exception as e:
+        logger.error(f"데이터 처리 중 오류 발생: {str(e)}")
+        raise
 
 def main():
     """
@@ -322,31 +365,38 @@ def main():
       3. 월별 데이터: YoY
       4. 일별 데이터: 로그 차분
     """
-    # 데이터 로드
-    DATA_NAME = '9X'
-    META_NAME = '9X_meta'
-    
-    df = load_data(f'data/{DATA_NAME}.csv')
-    meta_df = load_meta_data(f'data/{META_NAME}.csv')
-    
-    # 데이터 전처리
-    X, y, release_dates = process_data(df, meta_df)
-    
-    # 최종 데이터셋 생성
-    processed_df = pd.concat([X, y], axis=1)
-    processed_df = processed_df.ffill()
-    processed_df.index.name = 'date'
-    
-    X.index.name = 'date'
-    y.index.name = 'date'
-
-    # 결과 저장
-    processed_df.to_csv(f'data/processed/{DATA_NAME}.csv', index=True)
-    release_dates.to_csv(f'data/processed/{DATA_NAME}_cpi_release_date.csv', index=True)
-    
-    # X, y 데이터셋 별도 저장
-    X.to_csv(f'data/processed/X_{DATA_NAME}.csv', index=True)
-    y.to_frame().to_csv(f'data/processed/y_{DATA_NAME}.csv', index=True)
+    try:
+        # 데이터 로드
+        DATA_NAME = '9X'
+        META_NAME = '9X_meta'
+        
+        # CPI 관련 데이터의 lag 사용 여부 설정
+        USE_CPI_LAGS = True  # True로 설정하면 CPI 관련 데이터의 lag를 사용
+        
+        logger.info(f"데이터 로드 시작: {DATA_NAME}, {META_NAME}")
+        df = load_data(f'data/{DATA_NAME}.csv')
+        meta_df = load_meta_data(f'data/{META_NAME}.csv')
+        logger.info(f"데이터 로드 완료: df shape={df.shape}, meta_df shape={meta_df.shape}")
+        
+        # 데이터 전처리
+        X, y, release_dates = process_data(df, meta_df, use_cpi_lags=USE_CPI_LAGS)
+        
+        # 최종 데이터셋 생성
+        processed_df = pd.concat([X, y], axis=1)
+        processed_df = processed_df.ffill()
+        processed_df.index.name = 'date'
+        
+        # 결과 저장
+        logger.info("결과 저장 시작")
+        processed_df.to_csv(f'data/processed/{DATA_NAME}.csv', index=True)
+        release_dates.to_csv(f'data/processed/{DATA_NAME}_cpi_release_date.csv', index=True)
+        X.to_csv(f'data/processed/X_{DATA_NAME}.csv', index=True)
+        y.to_frame().to_csv(f'data/processed/y_{DATA_NAME}.csv', index=True)
+        logger.info("결과 저장 완료")
+        
+    except Exception as e:
+        logger.error(f"프로그램 실행 중 오류 발생: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main()
